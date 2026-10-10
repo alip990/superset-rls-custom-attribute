@@ -1,0 +1,69 @@
+name: superset-rls-custom-attribute
+
+x-superset: &superset
+  image: superset-rls-custom-attribute:6.1.0
+  build: .
+  depends_on:
+    db: {condition: service_healthy}
+
+services:
+  db:
+    image: postgres:16
+    environment: {POSTGRES_USER: postgres, POSTGRES_PASSWORD: postgres}
+    volumes:
+      - ./db/01-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - pgdata:/var/lib/postgresql/data
+    ports: ["127.0.0.1:5443:5432"]
+    healthcheck: {test: ["CMD", "pg_isready", "-U", "postgres"], interval: 5s, retries: 20}
+
+  redis:
+    image: redis:7-alpine
+
+  superset-init:
+    <<: *superset
+    command: >
+      bash -c "superset db upgrade &&
+               superset fab create-admin --username admin --firstname Admin --lastname User --email admin@example.com --password admin || true &&
+               superset init"
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_started}
+
+  superset:
+    <<: *superset
+    command: ["/app/.venv/bin/gunicorn", "--bind", "0.0.0.0:8088", "--workers", "1", "--threads", "4", "--timeout", "120", "superset.app:create_app()"]
+    ports: ["${SUPERSET_PORT:-8098}:8088"]
+    restart: unless-stopped
+    environment:
+      HOST_ORIGIN: http://localhost:${HOST_PORT:-8097}
+    depends_on:
+      superset-init: {condition: service_completed_successfully}
+      redis: {condition: service_started}
+    healthcheck: {test: ["CMD", "curl", "-f", "http://localhost:8088/health"], interval: 10s, retries: 30}
+
+  superset-bootstrap:
+    <<: *superset
+    command: python /app/bootstrap.py
+    volumes:
+      - ./bootstrap.py:/app/bootstrap.py:ro
+    environment: {SUPERSET_URL: http://superset:8088}
+    depends_on:
+      superset: {condition: service_healthy}
+
+  embed-app:
+    image: superset-rls-custom-attribute:6.1.0
+    command: python /srv/app.py
+    working_dir: /srv
+    volumes: ["./embed-app:/srv:ro"]
+    environment:
+      SUPERSET_URL: http://superset:8088
+      SUPERSET_PUBLIC_URL: http://localhost:${SUPERSET_PORT:-8098}
+      COMPANY_DB_URL: postgresql://demo_reader:demo_reader@db:5432/demo
+    ports: ["${HOST_PORT:-8097}:8090"]
+    restart: unless-stopped
+    healthcheck: {test: ["CMD", "curl", "-f", "http://localhost:8090/healthz"], interval: 10s, retries: 20}
+    depends_on:
+      superset-bootstrap: {condition: service_completed_successfully}
+
+volumes:
+  pgdata:

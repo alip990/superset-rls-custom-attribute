@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8"><title>محدوده شرکت — داشبورد تعبیه‌شده</title>
+  <style>
+    body { font-family: Tahoma, sans-serif; margin: 0; background: #f4f5f7; }
+    header { background: #1f2a44; color: #fff; padding: 12px 20px; display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+    select { font: inherit; padding: 4px 8px; }
+    code { background: #0002; padding: 2px 6px; border-radius: 4px; direction: ltr; display: inline-block; }
+    #dashboard { height: calc(100vh - 64px); min-height: 640px; }
+    #error { color: #ffb4b4; }
+    #dashboard iframe { width: 100%; height: 100%; border: 0; }
+  </style>
+</head>
+<body>
+<header>
+  <strong>اپلیکیشن ما</strong>
+  <label>کاربر:
+    <select id="user">
+      <option value="{{ admin }}" {% if admin == current_user %}selected{% endif %}>مدیر سامانه</option>
+      {% for u in users %}<option value="{{ u.username }}" {% if u.username == current_user %}selected{% endif %}>{{ u.name }} ({{ u.company }})</option>{% endfor %}
+    </select>
+  </label>
+  <label>شرکت:
+    <select id="company">
+      {% for c in companies %}<option value="{{ c.id }}" {% if c.id == current_company %}selected{% endif %}>{{ "— " * c.level }}{{ c.title }}</option>{% endfor %}
+    </select>
+  </label>
+  <span>allowed_companies: <code id="allowed">…</code></span>
+  <span id="error" role="alert"></span>
+</header>
+<div id="dashboard"></div>
+<script src="/static/embedded-sdk-0.3.0.js"></script>
+<script>
+  const el = id => document.getElementById(id);
+  async function api(path, body) {
+    const r = await fetch(path, body === undefined ? {} : {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'خطا');
+    return j;
+  }
+  async function fetchGuestToken() {
+    const j = await api('/guest-token');
+    const allowed = j.allowed_companies || [];
+    el('allowed').textContent = allowed.length ? allowed.join(', ') : '—';
+    return j.token;
+  }
+  let embedded;
+  async function mount() {
+    el('error').textContent = '';
+    try {
+      if (embedded) embedded.unmount();
+      el('dashboard').innerHTML = '';
+      embedded = await supersetEmbeddedSdk.embedDashboard({
+        id: {{ dashboard_uuid | tojson }},
+        supersetDomain: {{ superset_url | tojson }},
+        mountPoint: el('dashboard'), fetchGuestToken,
+        dashboardUiConfig: {hideTitle: false, filters: {visible: true, expanded: false}},
+      });
+    } catch (error) { el('error').textContent = error.message; }
+  }
+  const userSel = el('user'), companySel = el('company');
+  async function select(company) {
+    await api('/login', {user: userSel.value, company: company || null});
+    await mount();
+  }
+  userSel.onchange = async () => {
+    const j = await api('/companies?user=' + encodeURIComponent(userSel.value));
+    companySel.innerHTML = j.companies.map(c => `<option value="${c.id}">${'— '.repeat(c.level)}${c.title}</option>`).join('');
+    await select(companySel.value);
+  };
+  companySel.onchange = () => select(companySel.value);
+  mount();
+</script>
+</body>
+</html>
